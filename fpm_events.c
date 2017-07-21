@@ -362,7 +362,7 @@ int fpm_event_init_main() /* {{{ */
 	/* count the max number of necessary fds for polling */
 	max = 1; /* only one FD is necessary at startup for the master process signal pipe */
         
-        /*读取配置文件，根据配置文件的参数确定初始化进程数量*/
+        /*读取配置文件，根据配置文件的参数确定每个worker pool要初始化子进程数量*/
 	for (wp = fpm_worker_all_pools; wp; wp = wp->next) {
 		if (!wp->config) continue;
 		if (wp->config->catch_workers_output && wp->config->pm_max_children > 0) {

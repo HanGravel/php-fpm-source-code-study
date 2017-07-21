@@ -262,7 +262,8 @@ static int fpm_unix_conf_wp(struct fpm_worker_pool_s *wp) /* {{{ */
 	if (is_root) {
 		if (wp->config->user && *wp->config->user) {
 			if (strlen(wp->config->user) == strspn(wp->config->user, "0123456789")) {
-				wp->set_uid = strtoul(wp->config->user, 0, 10);
+                        /* 如果user字符串全为数字。 strspn(str,stack)表示字符串str中连续有多少个字符属于字符串stack*/
+				wp->set_uid = strtoul(wp->config->user, 0, 10);  //将字符串转为ulong类型
 			} else {
 				struct passwd *pwd;
 
@@ -331,6 +332,7 @@ int fpm_unix_init_child(struct fpm_worker_pool_s *wp) /* {{{ */
 	int is_root = !geteuid();
 	int made_chroot = 0;
 
+        /*在父进程设置过，但是子进程需要重新设置*/
 	if (wp->config->rlimit_files) {
 		struct rlimit r;
 
@@ -351,6 +353,7 @@ int fpm_unix_init_child(struct fpm_worker_pool_s *wp) /* {{{ */
 		}
 	}
 
+        /*设置两个目录*/
 	if (is_root && wp->config->chroot && *wp->config->chroot) {
 		if (0 > chroot(wp->config->chroot)) {
 			zlog(ZLOG_SYSERROR, "[pool %s] failed to chroot(%s)",  wp->config->name, wp->config->chroot);
@@ -372,13 +375,14 @@ int fpm_unix_init_child(struct fpm_worker_pool_s *wp) /* {{{ */
 
 	if (is_root) {
 
+            /*设置进程优先级*/
 		if (wp->config->process_priority != 64) {
 			if (setpriority(PRIO_PROCESS, 0, wp->config->process_priority) < 0) {
 				zlog(ZLOG_SYSERROR, "[pool %s] Unable to set priority for this new process", wp->config->name);
 				return -1;
 			}
 		}
-
+            /*设置gid和uid*/
 		if (wp->set_gid) {
 			if (0 > setgid(wp->set_gid)) {
 				zlog(ZLOG_SYSERROR, "[pool %s] failed to setgid(%d)", wp->config->name, wp->set_gid);
@@ -480,6 +484,12 @@ int fpm_unix_init_main() /* {{{ */
 	}
 
 	fpm_pagesize = getpagesize();
+        
+        /* Linux daemonize：
+         * 1. fork() then the parent exits; 因为父进程是从terminal启动的，所以父进程作为session group leader的session是跟terminal关联的。exit父进程，这样就注销了该进程与terminal相关联的session
+         * 2. setsid() ; 我们调用setsid()使子进程成为process group and session group leader。而这个新的session group是跟terminal没有关联的
+         */
+        
 	if (fpm_global_config.daemonize) {
 		/*
 		 * If daemonize, the calling process will die soon
@@ -497,6 +507,7 @@ int fpm_unix_init_main() /* {{{ */
 		fd_set rfds;
 		int ret;
 
+                /*创建pipe*/
 		if (pipe(fpm_globals.send_config_pipe) == -1) {
 			zlog(ZLOG_SYSERROR, "failed to create pipe");
 			return -1;
@@ -529,6 +540,8 @@ int fpm_unix_init_main() /* {{{ */
 				tv.tv_usec = 0;
 
 				zlog(ZLOG_DEBUG, "The calling process is waiting for the master process to ping via fd=%d", fpm_globals.send_config_pipe[0]);
+                                
+                                /* 父进程阻塞在此，当子进程完成fpm()，会向父进程发出1*/
 				ret = select(fpm_globals.send_config_pipe[0] + 1, &rfds, NULL, NULL, &tv);
 				if (ret == -1) {
 					zlog(ZLOG_SYSERROR, "failed to select");
@@ -564,13 +577,16 @@ int fpm_unix_init_main() /* {{{ */
 	}
 
 	/* continue as a child */
+        /* setsid的调用时机是 调用fork后把父进程exit，然后对子进程调用setsid.setsid()创建了一个新的会话以及进程组id*/
 	setsid();
+        /*根据配置对clock进行init*/
 	if (0 > fpm_clock_init()) {
 		return -1;
 	}
 
 	if (fpm_global_config.process_priority != 64) {
 		if (is_root) {
+                        /* setpriority()设置当前进程在内核中的进程调度优先级。 第3个参数的值越小，优先级越高.第2个参数为0，代表当前进程*/
 			if (setpriority(PRIO_PROCESS, 0, fpm_global_config.process_priority) < 0) {
 				zlog(ZLOG_SYSERROR, "Unable to set priority for the master process");
 				return -1;
@@ -580,7 +596,10 @@ int fpm_unix_init_main() /* {{{ */
 		}
 	}
 
+        /*获得当前进程的进程id*/
 	fpm_globals.parent_pid = getpid();
+        
+        /*设置部分worker pool信息*/
 	for (wp = fpm_worker_all_pools; wp; wp = wp->next) {
 		if (0 > fpm_unix_conf_wp(wp)) {
 			return -1;

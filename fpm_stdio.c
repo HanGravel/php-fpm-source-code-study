@@ -64,8 +64,11 @@ static inline int fpm_use_error_log() {  /* {{{ */
 /* }}} */
 int fpm_stdio_init_final() /* {{{ */
 {
+        /*如果主进程守护化过*/
 	if (fpm_use_error_log()) {
-		/* prevent duping if logging to syslog */
+		/* prevent duping if logging to syslog 
+                 * 把STDERR重定向到error_log_fd
+                 */
 		if (fpm_globals.error_log_fd > 0 && fpm_globals.error_log_fd != STDERR_FILENO) {
 
 			/* there might be messages to stderr from other parts of the code, we need to log them all */
@@ -81,6 +84,7 @@ int fpm_stdio_init_final() /* {{{ */
 		}
 #endif
 	}
+        /*启动log*/
 	zlog_set_launched();
 	return 0;
 }
@@ -104,6 +108,12 @@ int fpm_stdio_init_child(struct fpm_worker_pool_s *wp) /* {{{ */
 	fpm_globals.error_log_fd = -1;
 	zlog_set_fd(-1);
 
+        /* 如果wp->listening_socket不等于STDIN_FILENO，则把wp->listening_socket dup 给STDIN_FILENO
+         * 因此子进程的3个标准IO
+         * STDIN : wp->listening_socket
+         * STDOUT : 与主进程相连的pipe_stdout的写端
+         * STDERR : 与主进程相连的pipe_stderr的写端
+         */
 	if (wp->listening_socket != STDIN_FILENO) {
 		if (0 > dup2(wp->listening_socket, STDIN_FILENO)) {
 			zlog(ZLOG_SYSERROR, "failed to init child stdio: dup2()");
@@ -114,6 +124,7 @@ int fpm_stdio_init_child(struct fpm_worker_pool_s *wp) /* {{{ */
 }
 /* }}} */
 
+/* worker进程通过pipe向主进程传递信息后*/
 static void fpm_stdio_child_said(struct fpm_event_s *ev, short which, void *arg) /* {{{ */
 {
 	static const int max_buf_size = 1024;
@@ -211,17 +222,20 @@ static void fpm_stdio_child_said(struct fpm_event_s *ev, short which, void *arg)
 }
 /* }}} */
 
+/*管道pipe[0]是读端，pipe[1]是写端*/
 int fpm_stdio_prepare_pipes(struct fpm_child_s *child) /* {{{ */
 {
+        /*如果配置中没有要求捕捉worker信息，那么返回*/
 	if (0 == child->wp->config->catch_workers_output) { /* not required */
 		return 0;
 	}
 
+        /* 在fd_stdout上创建pipe*/
 	if (0 > pipe(fd_stdout)) {
 		zlog(ZLOG_SYSERROR, "failed to prepare the stdout pipe");
 		return -1;
 	}
-
+        /* 在fd_stderr上创建pipe*/
 	if (0 > pipe(fd_stderr)) {
 		zlog(ZLOG_SYSERROR, "failed to prepare the stderr pipe");
 		close(fd_stdout[0]);
@@ -229,6 +243,7 @@ int fpm_stdio_prepare_pipes(struct fpm_child_s *child) /* {{{ */
 		return -1;
 	}
 
+        /* 把两个pipe的读端设为非阻塞*/
 	if (0 > fd_set_blocked(fd_stdout[0], 0) || 0 > fd_set_blocked(fd_stderr[0], 0)) {
 		zlog(ZLOG_SYSERROR, "failed to unblock pipes");
 		close(fd_stdout[0]);
@@ -247,15 +262,18 @@ int fpm_stdio_parent_use_pipes(struct fpm_child_s *child) /* {{{ */
 		return 0;
 	}
 
+        /*关闭pipe的写端，写端由子进程持有*/
 	close(fd_stdout[1]);
 	close(fd_stderr[1]);
 
+        /*把两个读端赋给结构child*/
 	child->fd_stdout = fd_stdout[0];
 	child->fd_stderr = fd_stderr[0];
 
+        /* IO复用中注册可读事件，等待子进程写入信息*/
 	fpm_event_set(&child->ev_stdout, child->fd_stdout, FPM_EV_READ, fpm_stdio_child_said, child);
 	fpm_event_add(&child->ev_stdout, 0);
-
+        /* IO复用中注册可读事件，等待子进程写入信息*/
 	fpm_event_set(&child->ev_stderr, child->fd_stderr, FPM_EV_READ, fpm_stdio_child_said, child);
 	fpm_event_add(&child->ev_stderr, 0);
 	return 0;
@@ -277,6 +295,7 @@ int fpm_stdio_discard_pipes(struct fpm_child_s *child) /* {{{ */
 }
 /* }}} */
 
+/*把两个pipe的写端重定向到STDOUT和STDERR，并关闭两个pipe*/
 void fpm_stdio_child_use_pipes(struct fpm_child_s *child) /* {{{ */
 {
 	if (child->wp->config->catch_workers_output) {

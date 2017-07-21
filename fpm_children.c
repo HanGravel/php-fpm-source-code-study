@@ -93,6 +93,7 @@ static void fpm_child_link(struct fpm_child_s *child) /* {{{ */
 	++wp->running_children;
 	++fpm_globals.running_children;
 
+        /*在childs的链表头部加入这个新的child*/
 	child->next = wp->children;
 	if (child->next) {
 		child->next->prev = child;
@@ -147,10 +148,10 @@ static void fpm_child_init(struct fpm_worker_pool_s *wp) /* {{{ */
 {
 	fpm_globals.max_requests = wp->config->pm_max_requests;
 
-	if (0 > fpm_stdio_init_child(wp)  ||
-	    0 > fpm_log_init_child(wp)    ||
-	    0 > fpm_status_init_child(wp) ||
-	    0 > fpm_unix_init_child(wp)   ||
+	if (0 > fpm_stdio_init_child(wp)  ||   /*关闭fpm_globals.error_log_fd，这个FD为主进程专用，把wp->listening_socket dup 给STDIN_FILENO*/
+	    0 > fpm_log_init_child(wp)    ||   /*log*/
+	    0 > fpm_status_init_child(wp) ||   /*设置用于监控的变量*/
+	    0 > fpm_unix_init_child(wp)   ||   /**/
 	    0 > fpm_signals_init_child()  ||
 	    0 > fpm_env_init_child(wp)    ||
 	    0 > fpm_php_init_child(wp)) {
@@ -309,7 +310,9 @@ static struct fpm_child_s *fpm_resources_prepare(struct fpm_worker_pool_s *wp) /
 		return 0;
 	}
 
+        /* 把c->wp设为当前wp*/
 	c->wp = wp;
+        
 	c->fd_stdout = -1; c->fd_stderr = -1;
 
 	if (0 > fpm_stdio_prepare_pipes(c)) {
@@ -338,13 +341,15 @@ static void fpm_resources_discard(struct fpm_child_s *child) /* {{{ */
 static void fpm_child_resources_use(struct fpm_child_s *child) /* {{{ */
 {
 	struct fpm_worker_pool_s *wp;
+        
+        /* 在子进程里，free掉非当前worker pool的scoreboard*/
 	for (wp = fpm_worker_all_pools; wp; wp = wp->next) {
 		if (wp == child->wp) {
 			continue;
 		}
 		fpm_scoreboard_free(wp->scoreboard);
 	}
-
+        /*设置proc的pid和start_epoch*/
 	fpm_scoreboard_child_use(child->wp->scoreboard, child->scoreboard_i, getpid());
 	fpm_stdio_child_use_pipes(child);
 	fpm_child_free(child);
@@ -387,23 +392,29 @@ int fpm_children_make(struct fpm_worker_pool_s *wp, int in_event_loop, int nb_to
 	 *   - wp->running_children < max  : there is less than the max process for the current pool
 	 *   - (fpm_global_config.process_max < 1 || fpm_globals.running_children < fpm_global_config.process_max):
 	 *     if fpm_global_config.process_max is set, FPM has not fork this number of processes (globaly)
+         * 
+         * fpm_globals.running_children 代表所有wp的子进程的总和
 	 */
 	while (fpm_pctl_can_spawn_children() && wp->running_children < max && (fpm_global_config.process_max < 1 || fpm_globals.running_children < fpm_global_config.process_max)) {
 
 		warned = 0;
+                /* 新建一个struct fpm_child_s，返回其指针*/
 		child = fpm_resources_prepare(wp);
 
 		if (!child) {
 			return 2;
 		}
 
+                /* 此处fork出子程序 */
 		pid = fork();
 
 		switch (pid) {
 
-			case 0 :
+			case 0 : /*child*/
+                                /* free掉非当前worker pool的scoreboard,设置proc的pid和start_epoch,free掉fpm_child_s结构*/
 				fpm_child_resources_use(child);
 				fpm_globals.is_child = 1;
+                                /*init子进程*/
 				fpm_child_init(wp);
 				return 0;
 
@@ -413,9 +424,11 @@ int fpm_children_make(struct fpm_worker_pool_s *wp, int in_event_loop, int nb_to
 				fpm_resources_discard(child);
 				return 2;
 
-			default :
+			default :/*parent*/
+                                /*主进程继续持有fpm_child_s结构，并对pid和start(时间)赋值*/
 				child->pid = pid;
 				fpm_clock_get(&child->started);
+                                /*在反应堆中注册事件监听子进程的pipe写入，把持有的child结构加入到childs双向链表头部*/
 				fpm_parent_resources_use(child);
 
 				zlog(is_debug ? ZLOG_DEBUG : ZLOG_NOTICE, "[pool %s] child %d started", wp->config->name, (int) pid);
@@ -436,6 +449,7 @@ int fpm_children_make(struct fpm_worker_pool_s *wp, int in_event_loop, int nb_to
 
 int fpm_children_create_initial(struct fpm_worker_pool_s *wp) /* {{{ */
 {
+        /*配置pm=ondemand时*/
 	if (wp->config->pm == PM_STYLE_ONDEMAND) {
 		wp->ondemand_event = (struct fpm_event_s *)malloc(sizeof(struct fpm_event_s));
 
@@ -452,12 +466,17 @@ int fpm_children_create_initial(struct fpm_worker_pool_s *wp) /* {{{ */
 
 		return 1;
 	}
+        /*配置pm=static或dynamic*/
 	return fpm_children_make(wp, 0 /* not in event loop yet */, 0, 1);
 }
 /* }}} */
 
+/* 注册全局变量last_faults并初始化且注册析构函数。last_faults数组的元素是收到信号的时刻 */
 int fpm_children_init_main() /* {{{ */
 {
+        /* emergency_restart_threshold和emergency_restart_interval配置的用途：
+         * 如果子进程在emergency_restart_interval时间内收到emergency_restart_threshold次数的SIGSEGV或SIGBUS信号，那么FPM会重新启动
+         */
 	if (fpm_global_config.emergency_restart_threshold &&
 		fpm_global_config.emergency_restart_interval) {
 

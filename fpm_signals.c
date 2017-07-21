@@ -183,25 +183,31 @@ int fpm_signals_init_main() /* {{{ */
 {
 	struct sigaction act;
 
+        /* create socketpair*/
 	if (0 > socketpair(AF_UNIX, SOCK_STREAM, 0, sp)) {
 		zlog(ZLOG_SYSERROR, "failed to init signals: socketpair()");
 		return -1;
 	}
 
+        /*将两个socket设为NONBLOCK*/
 	if (0 > fd_set_blocked(sp[0], 0) || 0 > fd_set_blocked(sp[1], 0)) {
 		zlog(ZLOG_SYSERROR, "failed to init signals: fd_set_blocked()");
 		return -1;
 	}
 
+        /*如果程序成功地运行完毕，则自动关闭这两个fd*/
 	if (0 > fcntl(sp[0], F_SETFD, FD_CLOEXEC) || 0 > fcntl(sp[1], F_SETFD, FD_CLOEXEC)) {
 		zlog(ZLOG_SYSERROR, "falied to init signals: fcntl(F_SETFD, FD_CLOEXEC)");
 		return -1;
 	}
 
 	memset(&act, 0, sizeof(act));
+        /* 将信号处理函数设为sig_handler*/
 	act.sa_handler = sig_handler;
+        /* 将所有信号加入信号集*/
 	sigfillset(&act.sa_mask);
 
+        /* 更改指定信号的action */
 	if (0 > sigaction(SIGTERM,  &act, 0) ||
 	    0 > sigaction(SIGINT,   &act, 0) ||
 	    0 > sigaction(SIGUSR1,  &act, 0) ||

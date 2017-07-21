@@ -55,23 +55,33 @@ int fpm_scoreboard_init_main() /* {{{ */
 			return -1;
 		}
 
+                /* 每个worker pool拥有各自的struct fpm_scoreboard_s，worker pool的每个worker拥有各自的struct fpm_scoreboard_proc_s */
+                /* wp->config->pm_max_children * sizeof(struct fpm_scoreboard_proc_s *) 是指针数组的内存占用*/
 		scoreboard_size        = sizeof(struct fpm_scoreboard_s) + (wp->config->pm_max_children) * sizeof(struct fpm_scoreboard_proc_s *);
+                /* sizeof(struct fpm_scoreboard_proc_s) * wp->config->pm_max_children 是所有fpm_scoreboard_proc_s结构的内存占用*/
 		scoreboard_nprocs_size = sizeof(struct fpm_scoreboard_proc_s) * wp->config->pm_max_children;
+                
+                /* 这里使用共享内存的原因是，方便worker的IPC*/
 		shm_mem                = fpm_shm_alloc(scoreboard_size + scoreboard_nprocs_size);
 
 		if (!shm_mem) {
 			return -1;
 		}
+                /*指向所有结构的内存的指针*/
 		wp->scoreboard         = shm_mem;
+                /*子进程的数量*/
 		wp->scoreboard->nprocs = wp->config->pm_max_children;
 		shm_mem               += scoreboard_size;
 
 		for (i = 0; i < wp->scoreboard->nprocs; i++, shm_mem += sizeof(struct fpm_scoreboard_proc_s)) {
+                        /*把每个指向struct fpm_scoreboard_proc_s的指针放入数组*/
 			wp->scoreboard->procs[i] = shm_mem;
 		}
 
 		wp->scoreboard->pm          = wp->config->pm;
+                /*此时此刻的unix时间戳*/
 		wp->scoreboard->start_epoch = time(NULL);
+                
 		strlcpy(wp->scoreboard->pool, wp->config->name, sizeof(wp->scoreboard->pool));
 	}
 	return 0;
@@ -285,6 +295,8 @@ void fpm_scoreboard_proc_free(struct fpm_scoreboard_s *scoreboard, int child_ind
 }
 /* }}} */
 
+
+/* 所有malloc动态分配来的数据结构，其元素值全为0 */
 int fpm_scoreboard_proc_alloc(struct fpm_scoreboard_s *scoreboard, int *child_index) /* {{{ */
 {
 	int i = -1;
@@ -293,13 +305,16 @@ int fpm_scoreboard_proc_alloc(struct fpm_scoreboard_s *scoreboard, int *child_in
 		return -1;
 	}
 
-	/* first try the slot which is supposed to be free */
+	/* first try the slot which is supposed to be free 
+         * 步骤一 ：判断scoreboard->procs[scoreboard->free_proc]是否为空闲可用，如果空闲，那么获得这个下标
+         */
 	if (scoreboard->free_proc >= 0 && (unsigned int)scoreboard->free_proc < scoreboard->nprocs) {
 		if (scoreboard->procs[scoreboard->free_proc] && !scoreboard->procs[scoreboard->free_proc]->used) {
 			i = scoreboard->free_proc;
 		}
 	}
 
+        /* 步骤二：步骤一中未找到空闲的元素，那么遍历数组找到第一个空闲的scoreboard_proc */
 	if (i < 0) { /* the supposed free slot is not, let's search for a free slot */
 		zlog(ZLOG_DEBUG, "[pool %s] the proc->free_slot was not free. Let's search", scoreboard->pool);
 		for (i = 0; i < (int)scoreboard->nprocs; i++) {
@@ -309,16 +324,21 @@ int fpm_scoreboard_proc_alloc(struct fpm_scoreboard_s *scoreboard, int *child_in
 		}
 	}
 
-	/* no free slot */
+	/* no free slot 
+         * 如果所有数组元素都被占用，那么返回错误
+         */
 	if (i < 0 || i >= (int)scoreboard->nprocs) {
 		zlog(ZLOG_ERROR, "[pool %s] no free scoreboard slot", scoreboard->pool);
 		return -1;
 	}
 
+        /* 步骤三：把获得的空闲元素的used设为1*/
 	scoreboard->procs[i]->used = 1;
 	*child_index = i;
 
-	/* supposed next slot is free */
+	/* supposed next slot is free
+         * 步骤四：把 scoreboard->free_proc 设为 i+1或0
+         */
 	if (i + 1 >= (int)scoreboard->nprocs) {
 		scoreboard->free_proc = 0;
 	} else {

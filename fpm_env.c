@@ -167,6 +167,7 @@ static int fpm_env_conf_wp(struct fpm_worker_pool_s *wp) /* {{{ */
 {
 	struct key_value_s *kv;
 
+        /* 如果kv结构的value值为"$"，那么读取系统环境变量作为此值*/
 	for (kv = wp->config->env; kv; kv = kv->next) {
 		if (*kv->value == '$') {
 			char *value = getenv(kv->value + 1);
@@ -181,6 +182,7 @@ static int fpm_env_conf_wp(struct fpm_worker_pool_s *wp) /* {{{ */
 
 		/* autodetected values should be removed
 			if these vars specified in config */
+                /*如果kv结构中定义了USER或HOME，那么把wp中user或home释放掉并设为NULL*/
 		if (!strcmp(kv->key, "USER")) {
 			free(wp->user);
 			wp->user = 0;

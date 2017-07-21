@@ -37,6 +37,12 @@ struct listening_socket_s {
 	char *key;
 };
 
+/* refcount 表示由多少
+ * sock 是这个socket的fd
+ * type 由两个值 FPM_AF_UNIX 和 FPM_AF_INET，分别表示这个socket是unix域或者IP
+ * key 是地址字符串，可能是IP:port形式的地址，或者unix域地址
+ */
+
 static struct fpm_array_s sockets_list;
 
 enum { FPM_GET_USE_SOCKET = 1, FPM_STORE_SOCKET = 2, FPM_STORE_USE_SOCKET = 3 };
@@ -97,18 +103,26 @@ static int fpm_get_in_port(struct sockaddr *sa) /* {{{ */
 
 static int fpm_sockets_hash_op(int sock, struct sockaddr *sa, char *key, int type, int op) /* {{{ */
 {
+        /* 如果环境变量中没有指定FPM_SOCKETS */
 	if (key == NULL) {
 		switch (type) {
+                        /* 如果是IP地址*/
 			case FPM_AF_INET : {
+                                /* 10字节用来保存 ":(port)"*/
 				key = alloca(INET6_ADDRSTRLEN+10);
+                                /* key被赋值为点分十进制的IP地址 */
 				inet_ntop(sa->sa_family, fpm_get_in_addr(sa), key, INET6_ADDRSTRLEN);
+                                /* 在IP地址字符串后面添加port*/
 				sprintf(key+strlen(key), ":%d", fpm_get_in_port(sa));
 				break;
 			}
-
+                        
+                        /* 如果是unix域地址*/
 			case FPM_AF_UNIX : {
 				struct sockaddr_un *sa_un = (struct sockaddr_un *) sa;
+                                /* 多余的1字节用来保存\0 */
 				key = alloca(strlen(sa_un->sun_path) + 1);
+                                /* 把sa_un->sun_path赋值给key*/
 				strcpy(key, sa_un->sun_path);
 				break;
 			}
@@ -120,6 +134,7 @@ static int fpm_sockets_hash_op(int sock, struct sockaddr *sa, char *key, int typ
 
 	switch (op) {
 
+                /* 在sockets_list容器中根据key寻找socket,找到后返回其fd*/
 		case FPM_GET_USE_SOCKET :
 		{
 			unsigned i;
@@ -134,6 +149,7 @@ static int fpm_sockets_hash_op(int sock, struct sockaddr *sa, char *key, int typ
 			break;
 		}
 
+                /* 往sockets_list容器添加socket */
 		case FPM_STORE_SOCKET :			/* inherited socket */
 		case FPM_STORE_USE_SOCKET :		/* just created */
 		{
@@ -221,11 +237,13 @@ static int fpm_sockets_get_listening_socket(struct fpm_worker_pool_s *wp, struct
 {
 	int sock;
 
+        /*检查sockets_list容器是否已存在该地址的socket，若存在，直接返回*/
 	sock = fpm_sockets_hash_op(0, sa, 0, wp->listen_address_domain, FPM_GET_USE_SOCKET);
 	if (sock >= 0) {
 		return sock;
 	}
 
+        /* 不存在，新建socket并listen，然后加入sockets_list容器*/
 	sock = fpm_sockets_new_listening_socket(wp, sa, socklen);
 	fpm_sockets_hash_op(sock, sa, 0, wp->listen_address_domain, FPM_STORE_USE_SOCKET);
 
@@ -233,6 +251,7 @@ static int fpm_sockets_get_listening_socket(struct fpm_worker_pool_s *wp, struct
 }
 /* }}} */
 
+/* 分析该地址是unix域地址还是IP地址*/
 enum fpm_address_domain fpm_sockets_domain_from_address(char *address) /* {{{ */
 {
 	if (strchr(address, ':')) {
@@ -249,7 +268,7 @@ enum fpm_address_domain fpm_sockets_domain_from_address(char *address) /* {{{ */
 static int fpm_socket_af_inet_listening_socket(struct fpm_worker_pool_s *wp) /* {{{ */
 {
 	struct addrinfo hints, *servinfo, *p;
-	char *dup_address = strdup(wp->config->listen_address);
+	char *dup_address = strdup(wp->config->listen_address);  /*配置中的listen。 可用格式有"ip:port","port","/path/to/unix/socket" */
 	char *port_str = strrchr(dup_address, ':');
 	char *addr = NULL;
 	char tmpbuf[INET6_ADDRSTRLEN];
@@ -285,6 +304,9 @@ static int fpm_socket_af_inet_listening_socket(struct fpm_worker_pool_s *wp) /* 
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
 
+        /* 根据host字符串和port字符串解析出地址
+         * hints.ai_family = AF_UNSPEC 表示可接受任何类型的地址
+         */
 	if ((status = getaddrinfo(addr, port_str, &hints, &servinfo)) != 0) {
 		zlog(ZLOG_ERROR, "getaddrinfo: %s\n", gai_strerror(status));
 		free(dup_address);
@@ -326,11 +348,13 @@ int fpm_sockets_init_main() /* {{{ */
 	struct fpm_worker_pool_s *wp;
 	char *inherited = getenv("FPM_SOCKETS");
 	struct listening_socket_s *ls;
-
+        
+        /* 初始申请10个listening_socket_s结构的内存 。 socket_list为其容器*/
 	if (0 == fpm_array_init(&sockets_list, sizeof(struct listening_socket_s), 10)) {
 		return -1;
 	}
 
+        /*question : is there not a segmentation fault?*/
 	/* import inherited sockets */
 	while (inherited && *inherited) {
 		char *comma = strchr(inherited, ',');
@@ -345,11 +369,14 @@ int fpm_sockets_init_main() /* {{{ */
 		if (eq) {
 			*eq = '\0';
 			fd_no = atoi(eq + 1);
+                        /* 分析该地址是unix域地址还是IP地址*/
 			type = fpm_sockets_domain_from_address(inherited);
 			zlog(ZLOG_NOTICE, "using inherited socket fd=%d, \"%s\"", fd_no, inherited);
+                        /* 往sockets_list容器添加listening_socket_s结构， */
 			fpm_sockets_hash_op(fd_no, 0, inherited, type, FPM_STORE_SOCKET);
 		}
 
+                /*如果逗号后还有字符串，则继续匹配*/
 		if (comma) {
 			inherited = comma + 1;
 		} else {
@@ -361,13 +388,16 @@ int fpm_sockets_init_main() /* {{{ */
 	for (wp = fpm_worker_all_pools; wp; wp = wp->next) {
 		switch (wp->listen_address_domain) {
 			case FPM_AF_INET :
+                                /* 根据wp->config->listen_address字符串解析出地址结构，然后根据这个地址检测sockets_list中是否已存在，若存在，直接返回fd，若不存在，则新建一个socket后返回 */
 				wp->listening_socket = fpm_socket_af_inet_listening_socket(wp);
 				break;
 
 			case FPM_AF_UNIX :
+                                /* 解析socket文件的权限*/
 				if (0 > fpm_unix_resolve_socket_premissions(wp)) {
 					return -1;
 				}
+                                /*获得socket*/
 				wp->listening_socket = fpm_socket_af_unix_listening_socket(wp);
 				break;
 		}
@@ -376,6 +406,7 @@ int fpm_sockets_init_main() /* {{{ */
 			return -1;
 		}
 
+        /* 如果是IP类型的socket*/
 	if (wp->listen_address_domain == FPM_AF_INET && fpm_socket_get_listening_queue(wp->listening_socket, NULL, &lq_len) >= 0) {
 			fpm_scoreboard_update(-1, -1, -1, (int)lq_len, -1, -1, 0, FPM_SCOREBOARD_ACTION_SET, wp->scoreboard);
 		}

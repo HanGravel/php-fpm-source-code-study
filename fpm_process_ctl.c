@@ -272,6 +272,7 @@ int fpm_pctl_init_main() /* {{{ */
 		return -1;
 	}
 
+        /* 把argv从fpm_globals.argv从复制出来 */
 	for (i = 0; i < saved_argc; i++) {
 		saved_argv[i] = strdup(fpm_globals.argv[i]);
 
@@ -280,8 +281,10 @@ int fpm_pctl_init_main() /* {{{ */
 		}
 	}
 
+        /* 在saved_argv数组末尾加一个0元素 */
 	saved_argv[i] = 0;
 
+        /*注册析构函数*/
 	if (0 > fpm_cleanup_add(FPM_CLEANUP_ALL, fpm_pctl_cleanup, 0)) {
 		return -1;
 	}

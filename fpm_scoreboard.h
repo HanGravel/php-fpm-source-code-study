@@ -22,9 +22,9 @@ struct fpm_scoreboard_proc_s {
 		atomic_t lock;
 		char dummy[16];
 	};
-	int used;
-	time_t start_epoch;
-	pid_t pid;
+	int used;   /*是否已被某个worker占用，1表示已占用，0表示空闲*/
+	time_t start_epoch;  /*worker进程从master进程中fork出来之后的时间*/
+	pid_t pid;           /*worker进程（子进程）的pid*/
 	unsigned long requests;
 	enum fpm_request_stage_e request_stage;
 	struct timeval accepted;
@@ -51,9 +51,9 @@ struct fpm_scoreboard_s {
 		atomic_t lock;
 		char dummy[16];
 	};
-	char pool[32];
-	int pm;
-	time_t start_epoch;
+	char pool[32];          /* wp->config->name */
+	int pm;                 /* wp->config->pm */
+	time_t start_epoch;     /* init时的时间戳*/
 	int idle;
 	int active;
 	int active_max;
@@ -62,11 +62,14 @@ struct fpm_scoreboard_s {
 	int lq;
 	int lq_max;
 	unsigned int lq_len;
-	unsigned int nprocs;
-	int free_proc;
+	unsigned int nprocs;    /* wp->config->pm_max_children */
+	int free_proc;          /*procs数组中，某个空闲元素的下标*/
 	unsigned long int slow_rq;
 	struct fpm_scoreboard_proc_s *procs[];
 };
+/*
+ * int pm; 由config定义。有3个值：static (子进程数量固定，由pm.max_children决定) , ondemand (进程在有需求时才产生) , dynamic (子进程的数量在配置的基础上动态设置)
+ */
 
 int fpm_scoreboard_init_main();
 int fpm_scoreboard_init_child(struct fpm_worker_pool_s *wp);

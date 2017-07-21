@@ -51,7 +51,7 @@ struct fpm_globals_s {
 	int log_level;
 	int listening_socket; /* for this child */
 	int max_requests; /* for this child */
-	int is_child;
+	int is_child;     /*fork出子进程后，在子进程里设为1*/
 	int test_successful;
 	int heartbeat;
 	int run_as_root;

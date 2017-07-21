@@ -1868,10 +1868,16 @@ consult the installation file that came with this distribution, or visit \n\
 		}
 		return FPM_EXIT_CONFIG;
 	}
+        
+        /* fpm_globals.send_config_pipe 由fpm_unix_init_main() 初始化。
+         * 启动父进程持有send_config_pipe[0]，后台守护化的子进程持有 send_config_pipe[1]
+         * 父进程阻塞在select()等待子进程发出消息。
+         */
 
 	if (fpm_globals.send_config_pipe[1]) {
 		int writeval = 1;
 		zlog(ZLOG_DEBUG, "Sending \"1\" (OK) to parent via fd=%d", fpm_globals.send_config_pipe[1]);
+                /* 子进程发出OK信息，父进程收到后将结束进程*/
 		zend_quiet_write(fpm_globals.send_config_pipe[1], &writeval, sizeof(writeval));
 		close(fpm_globals.send_config_pipe[1]);
 	}

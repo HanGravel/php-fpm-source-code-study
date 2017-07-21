@@ -28,6 +28,7 @@ int fpm_socket_get_listening_queue(int sock, unsigned *cur_lq, unsigned *max_lq)
 int fpm_socket_unix_test_connect(struct sockaddr_un *sock, size_t socklen);
 
 
+/* 如果blocked为0，则将这个fd设为NONBLOCK。如果blocked为1，则将这个fd取消NONBLOCK*/
 static inline int fd_set_blocked(int fd, int blocked) /* {{{ */
 {
 	int flags = fcntl(fd, F_GETFL);

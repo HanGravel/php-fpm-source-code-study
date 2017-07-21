@@ -17,6 +17,7 @@
 
 static size_t fpm_shm_size = 0;
 
+/* 用shm的方式alloc内存*/
 void *fpm_shm_alloc(size_t size) /* {{{ */
 {
 	void *mem;

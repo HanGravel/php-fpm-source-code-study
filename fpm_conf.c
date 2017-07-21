@@ -1126,11 +1126,14 @@ int fpm_conf_write_pid() /* {{{ */
 {
 	int fd;
 
+        /*pid_file配置默认为NULL，若不为NULL，则写入*/
 	if (fpm_global_config.pid_file) {
 		char buf[64];
 		int len;
 
+                /*删除同名文件 */
 		unlink(fpm_global_config.pid_file);
+                /*创建一个存放pid的文件，该文件对当前用户可读可写，对当前组可执行，对其他用户可读*/
 		fd = creat(fpm_global_config.pid_file, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
 
 		if (fd < 0) {
@@ -1713,7 +1716,7 @@ int fpm_conf_init_main(int test_conf, int force_daemon) /* {{{ */
 		return -1;
 	}
 
-        /* 向LOG写当前配置*/
+        /* 如果这次run是为了test config,那么就退出*/
 	if (test_conf) {
 		if (test_conf > 1) {
 			fpm_conf_dump();
